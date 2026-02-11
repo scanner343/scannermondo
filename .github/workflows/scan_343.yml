@@ -1,9 +1,9 @@
-name: Scan Mondo 343 (RE-IT-7) # 1. Cambia Nome Workflow
+name: Scan Mondo 343 (RE-IT-7)
 
 on:
   schedule:
-    - cron: '0 */2 * * *' # Esegue ogni 2 ore
-  workflow_dispatch:      # Manuale
+    - cron: '15 */4 * * *' # Esegue ogni 4 ore al minuto 15
+  workflow_dispatch:       # Esecuzione manuale
 
 jobs:
   scan_job:
@@ -24,26 +24,26 @@ jobs:
         with:
           node-version: '18'
 
-      # CLONA LA REPO RE-PANZA (Database)
+      # 1. CLONA DATABASE RE-PANZA (Per avere lo storico)
       - name: Clone Database Repo
         env:
           MY_PAT: ${{ secrets.PAT_GITHUB }} 
         run: |
+          # Clona la repo dove tieni i JSON
           git clone https://x-access-token:${MY_PAT}@github.com/Re-Panza/lk_database.git db_repo
-          # 2. CAMBIA IL NOME FILE JSON QUI SOTTO (2 volte)
+          
+          # Copia il DB esistente nella cartella di lavoro corrente
           cp db_repo/database_mondo_343.json . || echo "[]" > database_mondo_343.json
 
-      # ESEGUI SCANNER PHP
+      # 2. ESEGUI SCANNER PHP (Usa il nuovo cURL)
       - name: Run PHP Scanner
-        # 3. CAMBIA IL NOME DELLO SCRIPT PHP QUI SOTTO
         run: php scanner_343.php
 
-      # AGGIORNA STORICO
+      # 3. ELABORA INATTIVITÀ CON NODE
       - name: Update History
-        # 4. CAMBIA IL NOME DELLO SCRIPT JS QUI SOTTO
         run: node update_history_343.js
 
-      # PUSHA I RISULTATI SU RE-PANZA
+      # 4. PUSHA I RISULTATI SU RE-PANZA
       - name: Push to Re-Panza Database
         env:
           MY_PAT: ${{ secrets.PAT_GITHUB }}
@@ -52,9 +52,9 @@ jobs:
           git config --global user.name "Re Panza Bot"
           git config --global user.email "bot@repanza.it"
           
-          # 5. CAMBIA IL NOME FILE JSON QUI SOTTO (2 volte)
+          # Sovrascrivi il file nella cartella della repo con i nuovi dati
           cp ../database_mondo_343.json .
           
+          # Committa e Pusha
           git add database_mondo_343.json
-          # 6. CAMBIA IL MESSAGGIO DI COMMIT (Opzionale)
           git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Update 343: $(date)" && git push)
