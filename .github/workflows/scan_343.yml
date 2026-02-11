@@ -1,0 +1,60 @@
+name: Scan Mondo 343 (RE-IT-7) # 1. Cambia Nome Workflow
+
+on:
+  schedule:
+    - cron: '0 */2 * * *' # Esegue ogni 2 ore
+  workflow_dispatch:      # Manuale
+
+jobs:
+  scan_job:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Codice Scanner
+        uses: actions/checkout@v4
+
+      - name: Setup PHP e Node
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # CLONA LA REPO RE-PANZA (Database)
+      - name: Clone Database Repo
+        env:
+          MY_PAT: ${{ secrets.PAT_GITHUB }} 
+        run: |
+          git clone https://x-access-token:${MY_PAT}@github.com/Re-Panza/lk_database.git db_repo
+          # 2. CAMBIA IL NOME FILE JSON QUI SOTTO (2 volte)
+          cp db_repo/database_mondo_343.json . || echo "[]" > database_mondo_343.json
+
+      # ESEGUI SCANNER PHP
+      - name: Run PHP Scanner
+        # 3. CAMBIA IL NOME DELLO SCRIPT PHP QUI SOTTO
+        run: php scanner_343.php
+
+      # AGGIORNA STORICO
+      - name: Update History
+        # 4. CAMBIA IL NOME DELLO SCRIPT JS QUI SOTTO
+        run: node update_history_343.js
+
+      # PUSHA I RISULTATI SU RE-PANZA
+      - name: Push to Re-Panza Database
+        env:
+          MY_PAT: ${{ secrets.PAT_GITHUB }}
+        run: |
+          cd db_repo
+          git config --global user.name "Re Panza Bot"
+          git config --global user.email "bot@repanza.it"
+          
+          # 5. CAMBIA IL NOME FILE JSON QUI SOTTO (2 volte)
+          cp ../database_mondo_343.json .
+          
+          git add database_mondo_343.json
+          # 6. CAMBIA IL MESSAGGIO DI COMMIT (Opzionale)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Update 343: $(date)" && git push)
