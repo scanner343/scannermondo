@@ -1,60 +1,72 @@
-name: Scan Mondo 343 (RE-IT-7)
+name: Scan Mondo 343
 
 on:
   schedule:
-    - cron: '15 */4 * * *' # Esegue ogni 4 ore al minuto 15
-  workflow_dispatch:       # Esecuzione manuale
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 jobs:
-  scan_job:
+  scan:
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Checkout Codice Scanner
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup PHP e Node
-        uses: shivammathur/setup-php@v2
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          php-version: '8.1'
-      
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '18'
+          python-version: '3.9'
 
-      # 1. CLONA DATABASE RE-PANZA (Per avere lo storico)
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright requests
+          playwright install chromium --with-deps
+
       - name: Clone Database Repo
         env:
           MY_PAT: ${{ secrets.PAT_GITHUB }} 
         run: |
-          # Clona la repo dove tieni i JSON
+          # Clona la repository principale dove si trovano i JSON
           git clone https://x-access-token:${MY_PAT}@github.com/Re-Panza/lk_database.git db_repo
           
-          # Copia il DB esistente nella cartella di lavoro corrente
+          # Preleva i file del mondo 343 se esistono
           cp db_repo/database_mondo_343.json . || echo "[]" > database_mondo_343.json
+          cp db_repo/cronologia_343.json . || echo "[]" > cronologia_343.json
 
-      # 2. ESEGUI SCANNER PHP (Usa il nuovo cURL)
-      - name: Run PHP Scanner
-        run: php scanner_343.php
+      - name: Run Unified Scanner
+        env:
+          LK_EMAIL: ${{ secrets.LK_EMAIL }}
+          LK_PASSWORD: ${{ secrets.LK_PASSWORD }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python unified_scanner.py
 
-      # 3. ELABORA INATTIVITÀ CON NODE
-      - name: Update History
-        run: node update_history_343.js
+      - name: Upload Debug Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: '*.png'
+          retention-days: 5
 
-      # 4. PUSHA I RISULTATI SU RE-PANZA
       - name: Push to Re-Panza Database
+        if: success()
         env:
           MY_PAT: ${{ secrets.PAT_GITHUB }}
         run: |
+          # Riporta i file elaborati dentro la cartella del database
+          cp database_mondo_343.json db_repo/
+          cp cronologia_343.json db_repo/
+          
           cd db_repo
-          git config --global user.name "Re Panza Bot"
-          git config --global user.email "bot@repanza.it"
+          # Firma del bot
+          git config --local user.email "bot@repanza.it"
+          git config --local user.name "Re Panza Unified Bot"
           
-          # Sovrascrivi il file nella cartella della repo con i nuovi dati
-          cp ../database_mondo_343.json .
-          
-          # Committa e Pusha
-          git add database_mondo_343.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Update 343: $(date)" && git push)
+          # Esegue commit, scarica eventuali aggiornamenti degli altri bot e pusha
+          git add database_mondo_343.json cronologia_343.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "📊 Unified Scan Mondo 343: $(date)" && git pull --rebase origin main && git push)
