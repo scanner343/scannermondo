@@ -2,7 +2,8 @@ name: Scan Mondo 343
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    # Partenza sfalsata per il 343: Minuto 08, delle ore 1, 7, 13, 19.
+    - cron: '8 1,7,13,19 * * *'
   workflow_dispatch:
 
 jobs:
@@ -67,6 +68,32 @@ jobs:
           git config --local user.email "bot@repanza.it"
           git config --local user.name "Re Panza Unified Bot"
           
-          # Esegue commit, scarica eventuali aggiornamenti degli altri bot e pusha
           git add database_mondo_343.json cronologia_343.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "📊 Unified Scan Mondo 343: $(date)" && git pull --rebase origin main && git push)
+          
+          # Controlla se ci sono effettive modifiche da salvare
+          if ! git diff --quiet || ! git diff --staged --quiet; then
+            git commit -m "📊 Unified Scan Mondo 343: $(date)"
+            
+            # SALA D'ATTESA: Riprova fino a 30 volte con pause casuali se c'è traffico
+            success=0
+            for i in {1..30}; do
+              if git pull --rebase origin main && git push; then
+                success=1
+                echo "✅ Dati salvati con successo nel database centrale!"
+                break
+              else
+                # Genera un numero casuale tra 10 e 40 secondi per evitare di scontrarsi di nuovo
+                ATTESA=$(( ( RANDOM % 31 ) + 10 ))
+                echo "⚠️ Database occupato da un altro bot! Aspetto $ATTESA secondi in sala d'attesa ($i/30)..."
+                sleep $ATTESA
+              fi
+            done
+            
+            if [ $success -eq 0 ]; then
+              echo "❌ Impossibile salvare dopo 30 tentativi. Troppo traffico, riproverò al prossimo ciclo."
+              exit 1
+            fi
+            
+          else
+            echo "Nessun nuovo castello, nessuna modifica da salvare."
+          fi
