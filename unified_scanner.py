@@ -47,7 +47,6 @@ class RePanzaClient:
     def auto_login(email, password):
         print("\n🔑 [LOGIN] Inizio procedura di Login Sicuro con Playwright...")
         
-        # --- Ciclo di ritentativo per 3 tentativi totali ---
         for tentativo in range(1, 4):
             print(f"   🔄 [TENTATIVO {tentativo}/3] Avvio browser Chrome invisibile...")
             with sync_playwright() as p:
@@ -88,7 +87,6 @@ class RePanzaClient:
                     start_time = time.time()
                     while time.time() - start_time < 60:
                         
-                        # --- Logica Popup 30 Secondi ---
                         if selector_ok.is_visible(): 
                             print("   ⚠️ [LOGIN] Popup OK trovato! Lo premo e attendo 30 secondi esatti...")
                             try: 
@@ -106,7 +104,6 @@ class RePanzaClient:
                             else:
                                 print(f"   ❌ [LOGIN] Passati i 30 secondi, il pacchetto sessionID non c'è. Interrompo il tentativo {tentativo}.")
                                 break 
-                        # ------------------------------------------
 
                         if selector_mondo.is_visible():
                             try: 
@@ -312,10 +309,10 @@ def extract_hidden_ids(node, known_map, found_set):
         if hx is not None and hy is not None:
             try:
                 hid = node.get('id') or node.get('habitatID') or node.get('primaryKey')
-                if hid:
+                if hid and str(hid).isdigit():
                     key = f"{int(hx)}_{int(hy)}"
                     if key in known_map:
-                        known_map[key]['id_habitat'] = hid
+                        known_map[key]['id_habitat'] = int(hid)
                         found_set.add(key)
             except: pass
         
@@ -325,15 +322,34 @@ def extract_hidden_ids(node, known_map, found_set):
                 sub_hy = v.get('y') or v.get('mapY') or v.get('mapy')
                 if sub_hx is not None and sub_hy is not None:
                     try:
-                        sub_hid = v.get('id') or v.get('primaryKey') or k
-                        key = f"{int(sub_hx)}_{int(sub_hy)}"
-                        if key in known_map:
-                            known_map[key]['id_habitat'] = sub_hid
-                            found_set.add(key)
+                        sub_hid = v.get('id') or v.get('primaryKey')
+                        if not sub_hid or not str(sub_hid).isdigit():
+                            sub_hid = k 
+                        if sub_hid and str(sub_hid).isdigit(): 
+                            key = f"{int(sub_hx)}_{int(sub_hy)}"
+                            if key in known_map:
+                                known_map[key]['id_habitat'] = int(sub_hid)
+                                found_set.add(key)
                     except: pass
             extract_hidden_ids(v, known_map, found_set)
             
     elif isinstance(node, list):
+        last_hx, last_hy = None, None
+        for item in node:
+            if isinstance(item, dict):
+                hx = item.get('x') or item.get('mapX') or item.get('mapx')
+                hy = item.get('y') or item.get('mapY') or item.get('mapy')
+                if hx is not None and hy is not None:
+                    last_hx, last_hy = hx, hy
+                hid = item.get('id') or item.get('habitatID') or item.get('primaryKey')
+                if hid and str(hid).isdigit():
+                    use_hx = hx if hx is not None else last_hx
+                    use_hy = hy if hy is not None else last_hy
+                    if use_hx is not None and use_hy is not None:
+                        key = f"{int(use_hx)}_{int(use_hy)}"
+                        if key in known_map:
+                            known_map[key]['id_habitat'] = int(hid)
+                            found_set.add(key)
         for item in node:
             extract_hidden_ids(item, known_map, found_set)
 
@@ -348,6 +364,9 @@ def enrich_with_habitat_ids(client, temp_map, castelli_senza_id):
         'Content-Type': 'application/x-www-form-urlencoded',
         'XYClient-Client': 'lk_b_3',
         'XYClient-Loginclient': 'Chrome',
+        'XYClient-Loginclientversion': '10.8.0',
+        'XYClient-Platform': 'browser',
+        'XYClient-Capabilities': 'base,fortress,city,parti%D0%B0l%CE%A4ran%D1%95its,starterpack,requestInformation,partialUpdate,regions,metropolis',
         'Origin': 'https://www.lordsandknights.com',
         'Referer': 'https://www.lordsandknights.com/'
     })
@@ -376,8 +395,10 @@ def enrich_with_habitat_ids(client, temp_map, castelli_senza_id):
                 extract_hidden_ids(data, temp_map, found_in_this_request)
                 habitat_trovati += len(found_in_this_request)
                 print(f"      ✔️ Estratti {len(found_in_this_request)} chiavi primarie!")
-        except Exception: 
-            pass
+            else:
+                print(f"      ❌ Errore HTTP {res.status_code} dal server.")
+        except Exception as e: 
+            print(f"      ❌ Errore di decodifica durante l'ispezione: {e}")
 
     print(f"🎯 [ID SEGRETI] Finito! Aggiunti {habitat_trovati} nuovi HabitatID nel database.")
 
@@ -425,11 +446,20 @@ def run_inactivity_check(data):
 
 def run_history_check(old_db_list, new_db_list, history_file):
     print("\n🕰️ [CRONOLOGIA] Verifico chi ha cambiato bandiera o nome...")
-    history = []
+    history = {}
+    needs_saving = False
     if os.path.exists(history_file):
         try:
             with open(history_file, 'r', encoding='utf-8') as f: 
-                history = json.load(f)
+                loaded_data = json.load(f)
+                if isinstance(loaded_data, dict): history = loaded_data
+                elif isinstance(loaded_data, list):
+                    print("   🔄 [MIGRAZIONE] Rilevato vecchio formato lista. Converto...")
+                    for ev in loaded_data:
+                        pid = str(ev.get('p'))
+                        if pid not in history: history[pid] = []
+                        history[pid].append(ev)
+                    needs_saving = True
         except: pass
 
     last_known = {}
@@ -447,33 +477,41 @@ def run_history_check(old_db_list, new_db_list, history_file):
                 current_known[pid] = {'n': h.get('pn', 'Sconosciuto'), 'a': h.get('a', 0), 'an': h.get('an', '')}
 
     now = int(time.time())
-    new_events = []
-
+    new_events_count = 0
     for pid, new_data in current_known.items():
         if pid in last_known:
             old_data = last_known[pid]
             old_name = old_data['n']
             new_name = new_data['n']
-            if old_name and old_name != "Sconosciuto" and new_name and new_name != "Sconosciuto" and old_name != new_name:
-                new_events.append({"type": "name", "p": pid, "old": old_name, "new": new_name, "d": now})
-                print(f"   📜 [EVENTO] Il Giocatore {pid} ha cambiato nome da '{old_name}' a '{new_name}'")
-            
+            name_changed = (old_name and old_name != "Sconosciuto" and new_name and new_name != "Sconosciuto" and old_name != new_name)
             old_ally = old_data['a']
             new_ally = new_data['a']
-            if old_ally != new_ally:
-                new_events.append({
-                    "type": "alliance", "p": pid, "old": old_ally, "new": new_ally, 
-                    "old_name": old_data['an'], "new_name": new_data['an'], "d": now
-                })
-                print(f"   📜 [EVENTO] Il Giocatore {pid} ha cambiato alleanza da {old_ally} a {new_ally}")
+            ally_changed = (old_ally != new_ally)
 
-    if new_events:
-        print(f"📥 [CRONOLOGIA] Salvo {len(new_events)} nuovi eventi nel file storico.")
-        history.extend(new_events)
-        with open(history_file, 'w', encoding='utf-8') as f: 
-            json.dump(history[-5000:], f, indent=2)
+            event_to_add = None
+            if name_changed and ally_changed:
+                event_to_add = {"type": "name_and_alliance", "p": pid, "old_name": old_name, "new_name": new_name, "old_ally": old_ally, "new_ally": new_ally, "old_ally_name": old_data['an'], "new_ally_name": new_data['an'], "d": now}
+                print(f"   📜 [EVENTO DOPPIO] Il Giocatore {pid} ha cambiato NOME e ALLEANZA")
+            elif name_changed:
+                event_to_add = {"type": "name", "p": pid, "old": old_name, "new": new_name, "d": now}
+                print(f"   📜 [EVENTO] Il Giocatore {pid} ha cambiato nome da '{old_name}' a '{new_name}'")
+            elif ally_changed:
+                event_to_add = {"type": "alliance", "p": pid, "old": old_ally, "new": new_ally, "old_name": old_data['an'], "new_name": new_data['an'], "d": now}
+                print(f"   📜 [EVENTO] Il Giocatore {pid} ha cambiato alleanza da {old_ally} a {new_ally}")
+            
+            if event_to_add:
+                str_pid = str(pid)
+                if str_pid not in history: history[str_pid] = []
+                history[str_pid].append(event_to_add)
+                if len(history[str_pid]) > 50: history[str_pid] = history[str_pid][-50:]
+                new_events_count += 1
+                needs_saving = True
+
+    if needs_saving:
+        print(f"📥 [CRONOLOGIA] Salvo lo storico aggiornato.")
+        with open(history_file, 'w', encoding='utf-8') as f: json.dump(history, f, indent=2)
     else:
-        print("💤 [CRONOLOGIA] Nessun cambiamento rilevato tra i giocatori.")
+        print("💤 [CRONOLOGIA] Nessun cambiamento rilevato.")
 
 
 def run_unified_scanner():
@@ -489,17 +527,19 @@ def run_unified_scanner():
     old_known_alliances = {}
     
     with open(FILE_DATABASE, 'r') as f:
-        print(f"📥 Sto caricando il vecchio database '{FILE_DATABASE}' nella memoria temporanea...")
+        print(f"📥 Sto caricando il vecchio database '{FILE_DATABASE}' e pulendo errori...")
         for entry in json.load(f): 
+            if 'id_habitat' in entry:
+                if not str(entry['id_habitat']).isdigit(): del entry['id_habitat']
+                else: entry['id_habitat'] = int(entry['id_habitat'])
             temp_map[f"{entry['x']}_{entry['y']}"] = entry
-            # Salviamo chi conoscevamo già per il controllo Smart Scan
             if entry.get('p') and entry.get('pn') and entry.get('pn') != "Sconosciuto":
                 old_known_players[entry['p']] = entry['pn']
             if entry.get('a') and entry.get('an'):
                 old_known_alliances[entry['a']] = entry['an']
                 
     old_db_list = copy.deepcopy(list(temp_map.values()))
-    print(f"📸 Ho scattato la 'fotografia' del database vecchio ({len(temp_map)} castelli noti).")
+    print(f"📸 Fotografia database scattata ({len(temp_map)} castelli noti).")
 
     print("\n=====================================================")
     print("🌍 FASE 2: SCANSIONE MAPPA PUBBLICA (Modo Stealth)")
@@ -514,19 +554,16 @@ def run_unified_scanner():
     punti_caldi = {}
     cache_conteggi_tile = {}
     
-    # Pre-calcolo la cache di quanti castelli ci sono nei quadranti noti
     for entry in temp_map.values():
         tx, ty = entry['x'] // 32, entry['y'] // 32
         chiave_tile = f"{tx}_{ty}"
         punti_caldi[chiave_tile] = (tx, ty)
         cache_conteggi_tile[chiave_tile] = cache_conteggi_tile.get(chiave_tile, 0) + 1
 
-    print(f"🔥 Prima passata: Aggiorno al volo {len(punti_caldi)} quadranti caldi già conosciuti...")
+    print(f"🔥 Prima passata: Aggiorno al volo {len(punti_caldi)} quadranti caldi...")
     for tx, ty in punti_caldi.values():
         num = process_tile_public(tx, ty, session, temp_map)
         cache_conteggi_tile[f"{tx}_{ty}"] = num 
-        if num > 0:
-            print(f"   📍 [AGGIORNAMENTO] Quadrante {tx}_{ty}: {num} castelli presenti.")
     print("✅ Punti caldi aggiornati.")
 
     centerX, centerY = 512, 512
@@ -535,7 +572,7 @@ def run_unified_scanner():
         if vals:
             centerX = sum(e['x']//32 for e in vals) // len(vals)
             centerY = sum(e['y']//32 for e in vals) // len(vals)
-    print(f"🚁 Avvio espansione a spirale dal centro di massa: Quadrante ({centerX}, {centerY})")
+    print(f"🚁 Avvio espansione a spirale: Centro ({centerX}, {centerY})")
 
     vuoti = 0
     for r in range(1, 150):
@@ -544,7 +581,6 @@ def run_unified_scanner():
         xMin, xMax = centerX - r, centerX + r
         yMin, yMax = centerY - r, centerY + r
         punti = []
-        
         for i in range(xMin, xMax + 1): 
             if 0 <= i <= 600:
                 if 0 <= yMin <= 600: punti.append((i, yMin))
@@ -555,43 +591,26 @@ def run_unified_scanner():
                 if 0 <= xMax <= 600: punti.append((xMax, j))
         
         punti = list(set(punti))
-        print(f"⭕ Anello {r}/150: Controllo {len(punti)} quadranti periferici...")
-        
         for px, py in punti:
             chiave_quadrante = f"{px}_{py}"
-            
             if chiave_quadrante in punti_caldi:
                 num = cache_conteggi_tile.get(chiave_quadrante, 0)
-                trovato = True
-                castelli_giro += num
-                if num > 0:
-                    print(f"   💾 [MEMORIA] Quadrante {px}_{py}: Ci sono {num} castelli (Già noti).")
+                if num > 0: trovato = True; castelli_giro += num
             else:
                 num = process_tile_public(px, py, session, temp_map)
-                if num > 0: 
-                    trovato = True
-                    print(f"   ✨ [NUOVO] Quadrante {px}_{py}: Trovati {num} castelli!")
-                    castelli_giro += num
+                if num > 0: trovato = True; castelli_giro += num
                 punti_caldi[chiave_quadrante] = (px, py)
                 cache_conteggi_tile[chiave_quadrante] = num
         
-        if trovato: 
-            print(f"   🏰 Anello {r} completato! Totale castelli attivi in questa zona: {castelli_giro}. Azzero vuoti.")
-            vuoti = 0
-        else: 
-            vuoti += 1
-            print(f"   🏜️ Anello {r} deserto. Giri a vuoto consecutivi: {vuoti}/3")
-            
-        if vuoti >=3: 
-            print(f"🛑 Mi fermo: Ho scansionato 3 anelli vuoti, la mappa è sicuramente finita.")
-            break
+        if trovato: vuoti = 0
+        else: vuoti += 1
+        if vuoti >=3: break
 
     # ANALISI SMART SCAN
     missing_p = set()
     missing_a = set()
     for entry in temp_map.values():
-        p = entry.get('p', 0)
-        a = entry.get('a', 0)
+        p, a = entry.get('p', 0), entry.get('a', 0)
         if p != 0 and p not in old_known_players: missing_p.add(p)
         if a != 0 and a not in old_known_alliances: missing_a.add(a)
 
@@ -599,60 +618,33 @@ def run_unified_scanner():
     is_full_scan = (len(old_db_list) == 0)
 
     if not is_full_scan and not missing_p and not missing_a and not castelli_senza_id:
-        print("\n⚡ NESSUN NUOVO GIOCATORE O CASTELLO RILEVATO.")
-        print("⏩ Salto completamente la Fase di Login e le Classifiche per risparmiare tempo!")
+        print("\n⚡ NESSUN NUOVO GIOCATORE O CASTELLO RILEVATO. Salto login!")
         temp_map = enrich_db_with_names(temp_map, old_known_players, old_known_alliances)
-        
     else:
         print("\n=====================================================")
         print("🔐 FASE 3: ACCESSO GIOCO E RICERCA DATI SEGRETI")
         print("=====================================================")
-        EMAIL = os.getenv("LK_EMAIL")
-        PASSWORD = os.getenv("LK_PASSWORD")
-        
-        client = None
-        if EMAIL and PASSWORD:
-            client = RePanzaClient.auto_login(EMAIL, PASSWORD)
-        else:
-            print("⚠️ LK_EMAIL o LK_PASSWORD mancanti nei Secrets di GitHub. Salto il login.")
+        EMAIL, PASSWORD = os.getenv("LK_EMAIL"), os.getenv("LK_PASSWORD")
+        client = RePanzaClient.auto_login(EMAIL, PASSWORD) if EMAIL and PASSWORD else None
         
         if client:
             p_arg = "ALL" if is_full_scan else missing_p
             a_arg = "ALL" if is_full_scan else missing_a
-            
             new_players = fetch_ranking(client, p_arg)
             new_alliances = fetch_alliance_ranking(client, a_arg)
-            
-            combined_players = {**old_known_players, **new_players}
-            combined_alliances = {**old_known_alliances, **new_alliances}
-            
-            temp_map = enrich_db_with_names(temp_map, combined_players, combined_alliances)
-            
-            if castelli_senza_id:
-                print(f"\n⚠️ Ho rilevato {len(castelli_senza_id)} nuovi castelli a cui manca la chiave primaria.")
-                enrich_with_habitat_ids(client, temp_map, castelli_senza_id)
+            temp_map = enrich_db_with_names(temp_map, {**old_known_players, **new_players}, {**old_known_alliances, **new_alliances})
+            if castelli_senza_id: enrich_with_habitat_ids(client, temp_map, castelli_senza_id)
         else:
-            print("❌ Login non riuscito. Non posso né scaricare i nomi, né cercare i nuovi ID Habitat.")
-            send_telegram_alert(WORLD_NAME)
+            print("❌ Login non riuscito."); send_telegram_alert(WORLD_NAME)
 
     print("\n=====================================================")
     print("💾 FASE 4: ELABORAZIONI FINALI E SALVATAGGIO")
     print("=====================================================")
-    
     temp_map = run_inactivity_check(temp_map)
-    new_db_list = list(temp_map.values())
-    run_history_check(old_db_list, new_db_list, FILE_HISTORY)
-    
-    print("🧹 Pulizia database: Elimino i castelli spariti dalla mappa da più di 3 giorni...")
+    run_history_check(old_db_list, list(temp_map.values()), FILE_HISTORY)
     final_list = [v for v in temp_map.values() if v['d'] > (time.time() - 259200)]
-    
-    print(f"📦 Compressione e scrittura nel file {FILE_DATABASE}...")
-    with open(FILE_DATABASE, 'w', encoding='utf-8') as f:
-        json.dump(final_list, f, indent=2, ensure_ascii=False)
-    
-    print("\n=====================================================")
-    print(f"✅ OPERAZIONE COMPLETATA! Database aggiornato e chiuso. ({len(final_list)} castelli in totale)")
-    print("=====================================================")
+    with open(FILE_DATABASE, 'w', encoding='utf-8') as f: json.dump(final_list, f, indent=2, ensure_ascii=False)
+    print(f"✅ OPERAZIONE COMPLETATA! Database chiuso. ({len(final_list)} castelli)")
 
 if __name__ == "__main__":
     run_unified_scanner()
